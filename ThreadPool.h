@@ -42,44 +42,9 @@ public:
     const int PerThreadnum = 2; // The number of threads created\destroyed each time
     ThreadPool(int MinThreadnum, int MaxThreadnum, int Taskmax);
 
-    int GetTaskmax();
-    int GetMaxThreadnum();
-    int GetMinThreadnum();
-
-    void SetLiveThreadnum(int liveThreadnum);
-    int GetLiveThreadnum();
-
-    void SetWorkingThreadnum(int workingThreadnum);
-    int GetWorkingThreadnum();
-
-    int GetCurrentTasknum();
-    void setCurrentTasknum(int CunrrentTasknum);
-
-    void SetDestroynum(int Destroynum);
-    int GetDestroynum();
-
-    void SetDestroyThreadPool(bool isDestroy);
-    bool GetDestroyThreadPool();
-
-    std::queue<Task> &getTaskQueue();
-    std::vector<std::thread> &GetWorkers();
-    std::mutex &GetMutexPool();
-    std::mutex &GetMutexWoringnum();
-    std::condition_variable &GetCondition_TaskFull();
-    std::condition_variable &GetCondition_TaskEmpty();
-
     void addTask(void (*functionptr)(void *), void *functionargs);
-    void WorkerExit();
-
     void WorkerFunction();
     void MangerFunction();
 
-    void notifyTaskComplete();
-    void waitAllTaskComplete();
-
     ~ThreadPool();
 };
-
-void ThreadWorkerFunction(ThreadPool *pool);
-
-void ThreadMangerFunction(ThreadPool *pool);

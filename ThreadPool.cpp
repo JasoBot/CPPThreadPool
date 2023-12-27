@@ -16,14 +16,12 @@ ThreadPool::ThreadPool(int MinThreadnum, int MaxThreadnum, int Taskmax)
     this->CurrentTasknum = 0;
     this->Destroynum = 0;
     this->DestroyThreadPool = false;
-    std::stringstream ss;
-    std::string id;
+
     // create threads
     for (int i = 0; i < MinThreadnum; i++)
     {
         this->Workers[i] = std::thread(&WorkerFunction, this);
         auto threadId = Workers[i].native_handle();
-
         std::cout << "Worker thread " << threadId << " is created" << std::endl;
     }
     this->Manger = std::thread(&MangerFunction, this);
@@ -51,125 +49,99 @@ ThreadPool::~ThreadPool()
     Workers.clear();
 }
 
-void ThreadWorkerFunction(ThreadPool *pool)
+void ThreadPool::WorkerFunction()
 {
     int tempWorkingnum;
-    Task *temptask = new Task;
+    Task task;
     while (1)
     {
-        pool->GetMutexPool().lock();
-        while (pool->GetCurrentTasknum() == 0 && !pool->GetDestroyThreadPool())
         {
-            /* Block worker threads */
-            std::unique_lock<std::mutex> lock(pool->GetMutexPool());
-            pool->GetCondition_TaskEmpty().wait(lock);
-
-            /* Try to destroy worker threads */
-            if (pool->GetDestroynum() > 0)
+            std::unique_lock<std::mutex> lock(this->mutexpool);
+            while (CurrentTasknum == 0 && !DestroyThreadPool)
             {
-                int destroy = pool->GetDestroynum();
-                pool->SetDestroynum(--destroy);
-                if (pool->GetLiveThreadnum() > pool->GetMinThreadnum())
+                TaskEmpty.wait(lock);
+                if (Destroynum > 0)
                 {
-                    int live = pool->GetLiveThreadnum();
-                    pool->SetLiveThreadnum(--live);
-                    pool->GetMutexPool().unlock();
-                    goto Exit;
+                    --Destroynum;
+                    if (LiveThreadnum > MinThreadnum)
+                    {
+                        --LiveThreadnum;
+                        goto Exit;
+                    }
                 }
             }
-        }
-        /* If threadPool is destroyed then destroy exitsting worker threads*/
-        if (pool->GetDestroyThreadPool())
+            if (DestroyThreadPool)
+            {
+                break;
+            }
+            task = std::move(TaskQueue.front());
+            TaskQueue.pop();
+            CurrentTasknum = TaskQueue.size();
+        } // release lock
         {
-            pool->GetMutexPool().unlock();
-            break;
+            std::lock_guard<std::mutex> lock(this->mutexWorkingnum);
+            WorkingThreadnum++;
         }
-
-        temptask->funcptr = pool->getTaskQueue().front().funcptr;
-        temptask->funcargs = pool->getTaskQueue().front().funcargs;
-        pool->getTaskQueue().pop();
-        pool->setCurrentTasknum(pool->getTaskQueue().size());
-        pool->GetMutexPool().unlock();
-
-        pool->GetMutexWoringnum().lock();
-        tempWorkingnum = pool->GetWorkingThreadnum();
-        pool->SetWorkingThreadnum(++tempWorkingnum);
-        pool->GetMutexWoringnum().unlock();
-
-        pool->GetMutexPool().lock();
-        printf("thread %ld is excuting task\n", std::this_thread::get_id());
-        temptask->funcptr(temptask->funcargs);
-        pool->GetMutexPool().unlock();
-        printf("thread %ld finshed a task ! \n", std::this_thread::get_id());
-        pool->GetMutexWoringnum().lock();
-        tempWorkingnum = pool->GetWorkingThreadnum();
-        pool->SetWorkingThreadnum(--tempWorkingnum);
-        pool->GetMutexWoringnum().unlock();
-        /* Wake up "addTask" function that is blocked because the number of tasks is full */
-        pool->GetCondition_TaskFull().notify_all();
+        // execute task
+        task.funcptr(task.funcargs);
+        {
+            std::lock_guard<std::mutex> lock(this->mutexWorkingnum);
+            WorkingThreadnum--;
+        }
+        TaskFull.notify_one();
     }
-Exit:
-    delete temptask;
-    pool->WorkerExit();
-}
 
-void ThreadMangerFunction(ThreadPool *pool)
-{
-    std::unique_lock<std::mutex> lock(pool->GetMutexPool());
+Exit:
     std::stringstream ss;
     std::string id_str;
-    while (!pool->GetDestroyThreadPool())
+    ss << std::this_thread::get_id();
+    id_str = ss.str();
+    std::cout << "Worker Thread " << id_str << " exited !" << std::endl;
+}
+
+void ThreadPool::MangerFunction()
+{
+    std::stringstream ss;
+    std::string id_str;
+    int cnt;
+    while (!DestroyThreadPool)
     {
-        sleep(3);
+        Sleep(30);
         /*
         If the number of task is 0, then the manger thread neeeds to
         be blocked until there is a task to wake up
         */
-        if (pool->GetCurrentTasknum() == 0)
-        {
-            pool->GetCondition_TaskEmpty().wait(lock);
-            if (pool->GetDestroyThreadPool())
-            {
-                break;
-            }
-        }
 
-        pool->GetMutexPool().lock();
-        int CurrentTasknum = pool->GetCurrentTasknum();
-        int liveThreadnum = pool->GetLiveThreadnum();
-        pool->GetMutexPool().unlock();
+        std::unique_lock<std::mutex> lock(mutexpool);
+        int taskCount = CurrentTasknum;
+        int liveThreadCount = LiveThreadnum;
+        int workingThreadCount = WorkingThreadnum;
+        lock.unlock();
 
-        pool->GetMutexWoringnum().lock();
-        int WorkingThreadnum = pool->GetWorkingThreadnum();
-        pool->GetMutexWoringnum().unlock();
-        int cnt = 0;
+        cnt = 0;
         // Need to create threads
-        printf("Current Tasknum: %d,  liveThreadnum: %d\n", CurrentTasknum, liveThreadnum);
-        if (liveThreadnum < CurrentTasknum && liveThreadnum < pool->GetMaxThreadnum() && !pool->GetDestroyThreadPool())
+        if (LiveThreadnum < CurrentTasknum && LiveThreadnum < MaxThreadnum && !DestroyThreadPool)
         {
-            for (int i = 0; i < pool->GetWorkers().size() && cnt < pool->PerThreadnum; i++)
+            for (int i = 0; i < Workers.size() && cnt < PerThreadnum; i++)
             {
-                if (!pool->GetWorkers()[i].joinable() && pool->GetLiveThreadnum() < pool->GetMaxThreadnum())
+                if (!Workers[i].joinable() && LiveThreadnum < MaxThreadnum)
                 {
-                    pool->GetWorkers()[i] = std::thread(&ThreadWorkerFunction, pool);
+                    Workers[i] = std::thread(WorkerFunction, this);
+                    auto threadID = Workers[i].native_handle();
+                    std::cout << "Worker thread " << threadID << " is added !" << std::endl;
                     cnt++;
-                    ss << pool->GetWorkers()[i].get_id();
-                    id_str = ss.str();
-                    printf("A Worker thread added whose threadID is %s.\n", id_str.c_str());
                 }
             }
         }
-
         // Need to destroy threads
-        printf("Working Threadnum: %d,  liveThreadnum: %d\n", WorkingThreadnum, liveThreadnum);
-        if (WorkingThreadnum > 0 && WorkingThreadnum * 2 < liveThreadnum && liveThreadnum > pool->GetMinThreadnum() && !pool->GetDestroynum())
+        if (WorkingThreadnum > 0 && WorkingThreadnum * 2 < LiveThreadnum && LiveThreadnum > MinThreadnum && !Destroynum)
         {
-            pool->GetMutexPool().lock();
-            pool->SetDestroynum(pool->PerThreadnum);
-            pool->GetMutexPool().unlock();
-            for (int i = 0; i < pool->PerThreadnum; i++)
+            mutexpool.lock();
+            Destroynum = PerThreadnum;
+            mutexpool.unlock();
+            for (int i = 0; i < PerThreadnum; i++)
             {
-                pool->GetCondition_TaskEmpty().notify_one();
+                TaskEmpty.notify_one();
             }
         }
     }
@@ -182,10 +154,12 @@ void ThreadPool::addTask(void (*functionptr)(void *), void *functionargs)
     {
         TaskFull.wait(lock);
     }
+    // If the thread pool is being destroyed, no new tasks are added
     if (DestroyThreadPool)
     {
-        return; // 如果线程池正在销毁，不再添加新任务
+        return; 
     }
+
     /*
     Use "emplace" to create a Task object in TaskQueue directly,instead of
     creating a temporary "Task" object used only once and then copying a copy
@@ -197,120 +171,4 @@ void ThreadPool::addTask(void (*functionptr)(void *), void *functionargs)
 
     /* Wake up manager and worker threads that are blocked because the number of tasks is empty */
     TaskEmpty.notify_one();
-}
-
-void ThreadPool::WorkerExit()
-{
-    auto CurrentID = std::this_thread::get_id();
-    /*
-    Create an "std::stringstream" object, and then insert the
-    thread ID into the "std::stringstream" object to convert the
-    thread ID to a string.
-    */
-    std::stringstream ss;
-    ss << std::this_thread::get_id();
-    std::string id_str = ss.str();
-    for (auto it = Workers.begin(); it != Workers.end(); it++)
-    {
-        if (CurrentID == it->get_id())
-        {
-            it->join();
-            printf("Thread %d destroyed !\n", id_str.c_str());
-        }
-    }
-}
-
-int ThreadPool::GetTaskmax()
-{
-    return this->Taskmax;
-}
-
-int ThreadPool::GetMaxThreadnum()
-{
-    return this->MaxThreadnum;
-}
-
-int ThreadPool::GetMinThreadnum()
-{
-    return this->MinThreadnum;
-}
-
-void ThreadPool::SetLiveThreadnum(int liveThreadnum)
-{
-    this->LiveThreadnum = liveThreadnum;
-}
-
-int ThreadPool::GetLiveThreadnum()
-{
-    return this->LiveThreadnum;
-}
-
-void ThreadPool::SetWorkingThreadnum(int workingThreadnum)
-{
-    this->WorkingThreadnum = workingThreadnum;
-}
-
-int ThreadPool::GetWorkingThreadnum()
-{
-    return this->WorkingThreadnum;
-}
-
-int ThreadPool::GetCurrentTasknum()
-{
-    return this->CurrentTasknum;
-}
-
-void ThreadPool::setCurrentTasknum(int CunrrentTasknum)
-{
-    this->CurrentTasknum = CunrrentTasknum;
-}
-
-void ThreadPool::SetDestroynum(int Destroynum)
-{
-    this->Destroynum = Destroynum;
-}
-
-int ThreadPool::GetDestroynum()
-{
-    return this->Destroynum;
-}
-
-void ThreadPool::SetDestroyThreadPool(bool isDestroy)
-{
-    this->DestroyThreadPool = isDestroy;
-}
-
-bool ThreadPool::GetDestroyThreadPool()
-{
-    return this->DestroyThreadPool;
-}
-
-std::vector<std::thread> &ThreadPool::GetWorkers()
-{
-    return this->Workers;
-}
-
-std::queue<Task> &ThreadPool::getTaskQueue()
-{
-    return this->TaskQueue;
-}
-
-std::mutex &ThreadPool::GetMutexPool()
-{
-    return this->mutexpool;
-}
-
-std::mutex &ThreadPool::GetMutexWoringnum()
-{
-    return this->mutexWorkingnum;
-}
-
-std::condition_variable &ThreadPool::GetCondition_TaskFull()
-{
-    return this->TaskFull;
-}
-
-std::condition_variable &ThreadPool::GetCondition_TaskEmpty()
-{
-    return this->TaskEmpty;
 }

@@ -18,9 +18,11 @@ int main()
     ThreadPool *pool = new ThreadPool(3, 10, 100);
     for (int i = 0; i < 100; i++)
     {
-        int *num = new int(i + 100);
+        int *num = new int(i + 100); 
+        Sleep(30);
         pool->addTask(task, num);
     }
+    sleep(10);
     delete pool;
     printf("ThreadPool shutdown safely\n");
     return 0;
