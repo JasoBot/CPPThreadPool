@@ -15,7 +15,7 @@ void task(void *args)
 
 int main()
 {
-    ThreadPool *pool = new ThreadPool(3, 10, 100);
+    ThreadPool<int> *pool = new ThreadPool<int>(3, 10, 100);
     for (int i = 0; i < 100; i++)
     {
         int *num = new int(i + 100); 
